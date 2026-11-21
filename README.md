@@ -2,6 +2,8 @@
 
 **Cross-platform live gaming server ping, jitter, and packet loss monitor for Linux, Windows 11, and Android.**
 
+![PingMap Screenshot](docs/screenshot.png)
+
 Built with **Kotlin + Compose Multiplatform** — zero root/admin privileges required, real-time TCP RTT latency graphs, best-server recommendations, and custom IP/host monitoring.
 
 ## Features
