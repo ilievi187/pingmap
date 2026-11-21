@@ -54,6 +54,7 @@ fun PingMapDashboardApp() {
     var intervalSec by remember { mutableStateOf(2) }
     var search by remember { mutableStateOf("") }
     var showAddDialog by remember { mutableStateOf(false) }
+    var maintenanceFeature by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(allTargets) {
         statsMap = allTargets.associate { target ->
@@ -123,7 +124,8 @@ fun PingMapDashboardApp() {
                 DashboardRail(
                     isRunning = isRunning,
                     pulse = pulseValue,
-                    onAdd = { showAddDialog = true }
+                    onAdd = { showAddDialog = true },
+                    onMaintenance = { maintenanceFeature = it }
                 )
 
                 Column(
@@ -190,6 +192,13 @@ fun PingMapDashboardApp() {
         }
     }
 
+    maintenanceFeature?.let { feature ->
+        MaintenanceDialog(
+            feature = feature,
+            onDismiss = { maintenanceFeature = null }
+        )
+    }
+
     if (showAddDialog) {
         DashboardAddServerDialog(
             onDismiss = { showAddDialog = false },
@@ -218,7 +227,8 @@ fun PingMapDashboardApp() {
 private fun DashboardRail(
     isRunning: Boolean,
     pulse: Float,
-    onAdd: () -> Unit
+    onAdd: () -> Unit,
+    onMaintenance: (String) -> Unit
 ) {
     Surface(
         modifier = Modifier.width(58.dp).fillMaxHeight(),
@@ -249,13 +259,13 @@ private fun DashboardRail(
             }
 
             Spacer(Modifier.height(4.dp))
-            RailIcon(Icons.Default.Home, false) {}
+            RailIcon(Icons.Default.Home, false, maintenance = true) { onMaintenance("Overview") }
             RailIcon(Icons.Default.Speed, true) {}
-            RailIcon(Icons.Default.Dns, false) {}
-            RailIcon(Icons.Default.Insights, false) {}
-            RailIcon(Icons.Default.Hub, false) {}
+            RailIcon(Icons.Default.Dns, false, maintenance = true) { onMaintenance("DNS tools") }
+            RailIcon(Icons.Default.Insights, false, maintenance = true) { onMaintenance("Analytics") }
+            RailIcon(Icons.Default.Hub, false, maintenance = true) { onMaintenance("Network topology") }
             Spacer(Modifier.weight(1f))
-            RailIcon(Icons.Default.Add, false, onAdd)
+            RailIcon(Icons.Default.Add, false, onClick = onAdd)
             RailIcon(Icons.Default.LocalCafe, false) {
                 openExternalUrl("https://buymeacoffee.com/aurorauap")
             }
@@ -264,7 +274,12 @@ private fun DashboardRail(
 }
 
 @Composable
-private fun RailIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, active: Boolean, onClick: () -> Unit) {
+private fun RailIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    active: Boolean,
+    maintenance: Boolean = false,
+    onClick: () -> Unit
+) {
     Box(
         modifier = Modifier
             .size(36.dp)
@@ -275,10 +290,27 @@ private fun RailIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, acti
     ) {
         Icon(
             icon,
-            contentDescription = null,
+            contentDescription = if (maintenance) "Under maintenance" else null,
             tint = if (active) PingPalette.Accent else Color(0xFF668097),
             modifier = Modifier.size(19.dp)
         )
+        if (maintenance) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(13.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFFFB84D)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Build,
+                    contentDescription = "Updates coming",
+                    tint = Color(0xFF241604),
+                    modifier = Modifier.size(8.dp)
+                )
+            }
+        }
     }
 }
 
@@ -884,6 +916,60 @@ private fun DashboardLatencyGraph(
         drawCircle(lineColor.copy(alpha = (1f - pulse) * 0.45f), radius = 5f + pulse * 7f, center = last)
         drawCircle(Color.White, radius = 2.8f, center = last)
     }
+}
+
+@Composable
+private fun MaintenanceDialog(
+    feature: String,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF0E1824),
+        icon = {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFFFFB84D).copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Build,
+                    contentDescription = null,
+                    tint = Color(0xFFFFB84D),
+                    modifier = Modifier.size(23.dp)
+                )
+            }
+        },
+        title = {
+            Text(
+                "Under maintenance",
+                color = PingPalette.Text,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "$feature is still being polished.",
+                    color = PingPalette.Text,
+                    fontSize = 13.sp
+                )
+                Text(
+                    "Updates coming soon.",
+                    color = Color(0xFFFFB84D),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Got it", color = PingPalette.Accent)
+            }
+        }
+    )
 }
 
 @Composable
