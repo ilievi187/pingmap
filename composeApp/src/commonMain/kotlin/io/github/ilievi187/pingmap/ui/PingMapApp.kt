@@ -93,7 +93,7 @@ fun PingMapApp() {
 
     suspend fun probeVisibleOnce() {
         val targets = allTargets.filter {
-            selectedCategory == GameCategory.ALL || it.target.category == selectedCategory
+            selectedCategory == GameCategory.ALL || it.category == selectedCategory
         }
         if (targets.isEmpty()) return
         val results = coroutineScope {
