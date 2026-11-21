@@ -60,8 +60,8 @@ android {
         applicationId = "io.github.ilievi187.pingmap"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     packaging {
@@ -113,7 +113,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Msi, TargetFormat.Exe)
             packageName = "PingMap"
-            packageVersion = "1.0.0"
+            packageVersion = "1.1.0"
             description = "Cross-platform live gaming server ping, jitter, and packet loss monitor for Linux, Windows, and Android."
             vendor = "ilievi187"
             copyright = "Copyright (c) 2026 ilievi187. Licensed under MIT."

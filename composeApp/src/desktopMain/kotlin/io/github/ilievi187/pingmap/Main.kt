@@ -10,7 +10,7 @@ import io.github.ilievi187.pingmap.ui.PingMapApp
 
 fun main(args: Array<String>) {
     if ("--smoke-test" in args) {
-        println("PingMap 1.0.0 smoke-test OK (${DefaultServers.preset.size} built-in servers)")
+        println("PingMap 1.1.0 smoke-test OK (${DefaultServers.preset.size} built-in servers)")
         return
     }
     application {

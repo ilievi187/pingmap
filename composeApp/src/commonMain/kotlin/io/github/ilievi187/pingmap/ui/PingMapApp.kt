@@ -1,10 +1,15 @@
 package io.github.ilievi187.pingmap.ui
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -18,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -25,6 +31,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -55,7 +62,6 @@ fun PingMapApp() {
         mutableStateOf(allTargets.associate { it.id to ServerStats(it) })
     }
 
-    // Keep statsMap synced when custom servers are added/removed
     LaunchedEffect(allTargets) {
         val next = LinkedHashMap<String, ServerStats>()
         for (t in allTargets) {
@@ -71,6 +77,18 @@ fun PingMapApp() {
     var isBursting by remember { mutableStateOf(false) }
     var selectedServerId by remember { mutableStateOf(DefaultServers.preset.first().id) }
     var showAddDialog by remember { mutableStateOf(false) }
+
+    // Shared smooth radar pulse animation for LIVE indicators & graph live dot
+    val pulseTransition = rememberInfiniteTransition(label = "radarPulse")
+    val pulseProgress by pulseTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "pulseProgress",
+    )
 
     val filteredStats = remember(statsMap, selectedCategory, sortMode) {
         val list = statsMap.values.filter {
@@ -130,10 +148,10 @@ fun PingMapApp() {
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                // Header
                 HeaderBar(
                     isRunning = isRunning,
                     isBursting = isBursting,
+                    pulseProgress = pulseProgress,
                     onToggleRun = { isRunning = !isRunning },
                     onBurst = {
                         if (!isBursting) {
@@ -153,14 +171,14 @@ fun PingMapApp() {
                     },
                 )
 
-                // Best Server Recommendation Banner
                 BestServerBanner(
                     best = bestServer,
                     category = selectedCategory,
+                    isRunning = isRunning,
+                    pulseProgress = pulseProgress,
                     onSelect = { selectedServerId = it.target.id },
                 )
 
-                // Category Chips + Sort/Interval Controls
                 FilterAndControlRow(
                     selectedCategory = selectedCategory,
                     onCategory = { selectedCategory = it },
@@ -170,12 +188,14 @@ fun PingMapApp() {
                     onInterval = { intervalSec = it },
                 )
 
-                // Selected Server Telemetry Graph Card
                 if (selectedStats != null) {
-                    SelectedTelemetryCard(stats = selectedStats)
+                    SelectedTelemetryCard(
+                        stats = selectedStats,
+                        isRunning = isRunning,
+                        pulseProgress = pulseProgress,
+                    )
                 }
 
-                // Server Cards List
                 LazyColumn(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -225,106 +245,183 @@ fun PingMapApp() {
 }
 
 @Composable
+private fun GlowIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    tint: Color,
+    onClick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val scale by animateFloatAsState(if (hovered) 1.12f else 1f, tween(140), label = "iconScale")
+    val bg by animateColorAsState(
+        if (hovered) tint.copy(alpha = 0.18f) else Color.Transparent,
+        tween(150),
+        label = "iconBg",
+    )
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .scale(scale)
+            .clip(RoundedCornerShape(10.dp))
+            .background(bg)
+            .hoverable(interaction)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(20.dp))
+    }
+}
+
+@Composable
 private fun HeaderBar(
     isRunning: Boolean,
     isBursting: Boolean,
+    pulseProgress: Float,
     onToggleRun: () -> Unit,
     onBurst: () -> Unit,
     onAddCustom: () -> Unit,
     onReset: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(PingPalette.Surface)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    val toggleHover = remember { MutableInteractionSource() }
+    val toggleIsHovered by toggleHover.collectIsHoveredAsState()
+    val toggleScale by animateFloatAsState(if (toggleIsHovered) 1.04f else 1f, tween(140), label = "toggleScale")
+
+    val burstHover = remember { MutableInteractionSource() }
+    val burstIsHovered by burstHover.collectIsHoveredAsState()
+    val burstScale by animateFloatAsState(if (burstIsHovered) 1.04f else 1f, tween(140), label = "burstScale")
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, PingPalette.Border),
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .size(36.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(PingPalette.Accent.copy(alpha = 0.16f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Default.NetworkCheck,
-                contentDescription = "PingMap",
-                tint = PingPalette.Accent,
-                modifier = Modifier.size(22.dp),
-            )
-        }
-
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "PingMap",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = PingPalette.Text,
-                )
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(
-                            if (isRunning) PingPalette.Excellent.copy(alpha = 0.18f)
-                            else PingPalette.Muted.copy(alpha = 0.16f)
+                .fillMaxWidth()
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            Color(0xFF132036),
+                            PingPalette.Surface,
+                            Color(0xFF101B2D),
                         )
-                        .padding(horizontal = 7.dp, vertical = 2.dp),
-                ) {
-                    Text(
-                        text = if (isRunning) "LIVE" else "PAUSED",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isRunning) PingPalette.Excellent else PingPalette.Muted,
                     )
+                )
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(PingPalette.Accent.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (isRunning) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val r = size.minDimension * (0.22f + pulseProgress * 0.30f)
+                        drawCircle(
+                            color = PingPalette.Accent.copy(alpha = (1f - pulseProgress) * 0.55f),
+                            radius = r,
+                            style = Stroke(width = 2f),
+                        )
+                    }
                 }
+                Icon(
+                    imageVector = Icons.Default.NetworkCheck,
+                    contentDescription = "PingMap",
+                    tint = PingPalette.Accent,
+                    modifier = Modifier.size(22.dp),
+                )
             }
-            Text(
-                text = "Gaming & Network Latency Monitor · ${platformName()}",
-                fontSize = 11.sp,
-                color = PingPalette.Muted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
 
-        FilledTonalButton(
-            onClick = onToggleRun,
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-            colors = ButtonDefaults.filledTonalButtonColors(
-                containerColor = if (isRunning) PingPalette.Card else PingPalette.Accent,
-                contentColor = if (isRunning) PingPalette.Text else Color(0xFF04131F),
-            ),
-        ) {
-            Icon(
-                imageVector = if (isRunning) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(if (isRunning) "Pause" else "Start", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-        }
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "PingMap",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = PingPalette.Text,
+                    )
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                if (isRunning) PingPalette.Excellent.copy(alpha = 0.18f)
+                                else PingPalette.Muted.copy(alpha = 0.16f)
+                            )
+                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        Canvas(modifier = Modifier.size(7.dp)) {
+                            if (isRunning) {
+                                drawCircle(
+                                    color = PingPalette.Excellent.copy(alpha = (1f - pulseProgress) * 0.7f),
+                                    radius = size.minDimension * (0.4f + pulseProgress * 0.6f),
+                                )
+                            }
+                            drawCircle(
+                                color = if (isRunning) PingPalette.Excellent else PingPalette.Muted,
+                                radius = size.minDimension * 0.42f,
+                            )
+                        }
+                        Text(
+                            text = if (isRunning) "LIVE" else "PAUSED",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isRunning) PingPalette.Excellent else PingPalette.Muted,
+                        )
+                    }
+                }
+                Text(
+                    text = "Gaming & Network Latency Monitor · ${platformName()}",
+                    fontSize = 11.sp,
+                    color = PingPalette.Muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
 
-        OutlinedButton(
-            onClick = onBurst,
-            enabled = !isBursting,
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-            border = BorderStroke(1.dp, PingPalette.Border),
-        ) {
-            Text(if (isBursting) "5×…" else "5× Burst", fontSize = 12.sp, color = PingPalette.Accent)
-        }
+            FilledTonalButton(
+                onClick = onToggleRun,
+                modifier = Modifier.scale(toggleScale).hoverable(toggleHover),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = if (isRunning) PingPalette.Card else PingPalette.Accent,
+                    contentColor = if (isRunning) PingPalette.Text else Color(0xFF04131F),
+                ),
+            ) {
+                Icon(
+                    imageVector = if (isRunning) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(if (isRunning) "Pause" else "Start", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
 
-        IconButton(onClick = onAddCustom) {
-            Icon(Icons.Default.AddCircleOutline, contentDescription = "Add Custom Server", tint = PingPalette.Accent)
-        }
-        IconButton(onClick = onReset) {
-            Icon(Icons.Default.Refresh, contentDescription = "Reset Stats", tint = PingPalette.Muted)
-        }
-        IconButton(onClick = { openExternalUrl("https://buymeacoffee.com/aurorauap") }) {
-            Icon(Icons.Default.LocalCafe, contentDescription = "Support", tint = PingPalette.Fair)
+            OutlinedButton(
+                onClick = onBurst,
+                enabled = !isBursting,
+                modifier = Modifier.scale(burstScale).hoverable(burstHover),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                border = BorderStroke(
+                    1.dp,
+                    if (burstIsHovered || isBursting) PingPalette.Accent else PingPalette.Border,
+                ),
+            ) {
+                Text(if (isBursting) "5×…" else "5× Burst", fontSize = 12.sp, color = PingPalette.Accent)
+            }
+
+            GlowIconButton(Icons.Default.AddCircleOutline, "Add Custom Server", PingPalette.Accent, onAddCustom)
+            GlowIconButton(Icons.Default.Refresh, "Reset Stats", PingPalette.Muted, onReset)
+            GlowIconButton(Icons.Default.LocalCafe, "Support", PingPalette.Fair) {
+                openExternalUrl("https://buymeacoffee.com/aurorauap")
+            }
         }
     }
 }
@@ -333,28 +430,54 @@ private fun HeaderBar(
 private fun BestServerBanner(
     best: ServerStats?,
     category: GameCategory,
+    isRunning: Boolean,
+    pulseProgress: Float,
     onSelect: (ServerStats) -> Unit,
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val rawAccent = best?.grade?.color() ?: PingPalette.Accent
+    val accent by animateColorAsState(rawAccent, tween(300), label = "bestAccent")
+    val borderAlpha by animateFloatAsState(if (hovered) 0.85f else 0.45f, tween(160), label = "bestBorder")
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
+            .hoverable(interaction)
             .clickable(enabled = best != null) { best?.let(onSelect) },
-        color = PingPalette.Card,
-        border = BorderStroke(1.dp, (best?.grade?.color() ?: PingPalette.Border).copy(alpha = 0.45f)),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, accent.copy(alpha = borderAlpha)),
         shape = RoundedCornerShape(12.dp),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(accent.copy(alpha = 0.14f), PingPalette.Card, PingPalette.Card)
+                    )
+                )
+                .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Icon(
-                imageVector = Icons.Default.Bolt,
-                contentDescription = null,
-                tint = best?.grade?.color() ?: PingPalette.Accent,
-                modifier = Modifier.size(20.dp),
-            )
+            Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                if (isRunning && best != null) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        drawCircle(
+                            color = accent.copy(alpha = (1f - pulseProgress) * 0.45f),
+                            radius = size.minDimension * (0.3f + pulseProgress * 0.45f),
+                        )
+                    }
+                }
+                Icon(
+                    imageVector = Icons.Default.Bolt,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
             if (best == null) {
                 Text(
                     text = "Measuring ${category.label} servers…",
@@ -455,12 +578,22 @@ private fun FilterAndControlRow(
 }
 
 @Composable
-private fun SelectedTelemetryCard(stats: ServerStats) {
-    val accent = stats.grade.color()
+private fun SelectedTelemetryCard(
+    stats: ServerStats,
+    isRunning: Boolean,
+    pulseProgress: Float,
+) {
+    val accent by animateColorAsState(stats.grade.color(), tween(320), label = "selAccent")
+    val animatedRtt by animateFloatAsState(
+        targetValue = (stats.currentMs ?: 0.0).toFloat(),
+        animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
+        label = "animatedRtt",
+    )
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = PingPalette.Surface,
-        border = BorderStroke(1.dp, PingPalette.Border),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
         shape = RoundedCornerShape(14.dp),
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -485,8 +618,8 @@ private fun SelectedTelemetryCard(stats: ServerStats) {
                     )
                 }
                 Text(
-                    text = fmtMs(stats.currentMs),
-                    fontSize = 22.sp,
+                    text = if (stats.currentMs == null) "—" else fmtMs(animatedRtt.toDouble()),
+                    fontSize = 23.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = accent,
                 )
@@ -495,7 +628,9 @@ private fun SelectedTelemetryCard(stats: ServerStats) {
             LatencyGraph(
                 samples = stats.samples,
                 lineColor = accent,
-                modifier = Modifier.fillMaxWidth().height(84.dp),
+                showGrid = true,
+                livePulse = if (isRunning) pulseProgress else null,
+                modifier = Modifier.fillMaxWidth().height(88.dp),
             )
 
             Row(
@@ -531,14 +666,43 @@ private fun ServerCard(
     onClick: () -> Unit,
     onDelete: (() -> Unit)?,
 ) {
-    val gradeColor = stats.grade.color()
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+
+    val gradeColor by animateColorAsState(stats.grade.color(), tween(280), label = "cardGrade")
+    val bgColor by animateColorAsState(
+        targetValue = when {
+            isSelected -> PingPalette.CardSelected
+            hovered -> Color(0xFF19263B)
+            else -> PingPalette.Card
+        },
+        animationSpec = tween(150),
+        label = "cardBg",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = when {
+            isSelected -> PingPalette.Accent
+            hovered -> gradeColor.copy(alpha = 0.65f)
+            else -> PingPalette.Border
+        },
+        animationSpec = tween(150),
+        label = "cardBorder",
+    )
+    val cardScale by animateFloatAsState(
+        targetValue = if (hovered) 1.008f else 1f,
+        animationSpec = tween(140),
+        label = "cardScale",
+    )
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .scale(cardScale)
             .clip(RoundedCornerShape(12.dp))
+            .hoverable(interaction)
             .clickable(onClick = onClick),
-        color = if (isSelected) PingPalette.CardSelected else PingPalette.Card,
-        border = BorderStroke(1.dp, if (isSelected) PingPalette.Accent else PingPalette.Border),
+        color = bgColor,
+        border = BorderStroke(if (isSelected || hovered) 1.4.dp else 1.dp, borderColor),
         shape = RoundedCornerShape(12.dp),
     ) {
         Row(
@@ -574,7 +738,9 @@ private fun ServerCard(
             LatencyGraph(
                 samples = stats.samples,
                 lineColor = gradeColor,
-                modifier = Modifier.width(78.dp).height(30.dp),
+                showGrid = false,
+                livePulse = null,
+                modifier = Modifier.width(82.dp).height(30.dp),
             )
 
             Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(74.dp)) {
@@ -592,14 +758,7 @@ private fun ServerCard(
             }
 
             if (onDelete != null) {
-                IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
-                    Icon(
-                        imageVector = Icons.Default.DeleteOutline,
-                        contentDescription = "Delete Custom Server",
-                        tint = PingPalette.Poor,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
+                GlowIconButton(Icons.Default.DeleteOutline, "Delete Custom Server", PingPalette.Poor, onDelete)
             }
         }
     }
@@ -609,6 +768,8 @@ private fun ServerCard(
 private fun LatencyGraph(
     samples: List<PingSample>,
     lineColor: Color,
+    showGrid: Boolean = false,
+    livePulse: Float? = null,
     modifier: Modifier = Modifier,
 ) {
     Canvas(modifier = modifier) {
@@ -616,9 +777,18 @@ private fun LatencyGraph(
         val h = size.height
         if (samples.isEmpty() || w <= 0f || h <= 0f) return@Canvas
 
-        // Subtle baseline
+        if (showGrid) {
+            for (frac in listOf(0.25f, 0.5f, 0.75f)) {
+                drawLine(
+                    color = PingPalette.Border.copy(alpha = 0.35f),
+                    start = Offset(0f, h * frac),
+                    end = Offset(w, h * frac),
+                    strokeWidth = 1f,
+                )
+            }
+        }
         drawLine(
-            color = PingPalette.Border.copy(alpha = 0.5f),
+            color = PingPalette.Border.copy(alpha = 0.55f),
             start = Offset(0f, h - 1f),
             end = Offset(w, h - 1f),
             strokeWidth = 1f,
@@ -632,20 +802,20 @@ private fun LatencyGraph(
         val fillPath = Path()
         var started = false
         var lastX = 0f
+        var lastY = h / 2f
 
         samples.forEachIndexed { idx, sample ->
             val x = idx * stepX
             val rtt = sample.rttMs
             if (rtt == null) {
-                // Draw red vertical drop marker for packet loss
                 drawLine(
-                    color = PingPalette.Poor.copy(alpha = 0.7f),
+                    color = PingPalette.Poor.copy(alpha = 0.75f),
                     start = Offset(x, 0f),
                     end = Offset(x, h),
                     strokeWidth = 2f,
                 )
             } else {
-                val y = (h - ((rtt / maxVal).toFloat().coerceIn(0f, 1f) * (h - 6f)) - 3f)
+                val y = (h - ((rtt / maxVal).toFloat().coerceIn(0f, 1f) * (h - 8f)) - 4f)
                 if (!started) {
                     linePath.moveTo(x, y)
                     fillPath.moveTo(x, h)
@@ -656,6 +826,7 @@ private fun LatencyGraph(
                     fillPath.lineTo(x, y)
                 }
                 lastX = x
+                lastY = y
             }
         }
 
@@ -665,21 +836,40 @@ private fun LatencyGraph(
             drawPath(
                 path = fillPath,
                 brush = Brush.verticalGradient(
-                    colors = listOf(lineColor.copy(alpha = 0.28f), Color.Transparent),
+                    colors = listOf(lineColor.copy(alpha = 0.30f), Color.Transparent),
                 ),
+            )
+            // Soft outer neon glow stroke
+            drawPath(
+                path = linePath,
+                color = lineColor.copy(alpha = 0.25f),
+                style = Stroke(width = 6f, cap = StrokeCap.Round, join = StrokeJoin.Round),
             )
             drawPath(
                 path = linePath,
                 color = lineColor,
-                style = Stroke(width = 2.2f, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                style = Stroke(width = 2.3f, cap = StrokeCap.Round, join = StrokeJoin.Round),
             )
+            // Pulsing live endpoint dot on the main telemetry chart
+            if (livePulse != null) {
+                drawCircle(
+                    color = lineColor.copy(alpha = (1f - livePulse) * 0.65f),
+                    radius = 4f + livePulse * 8f,
+                    center = Offset(lastX, lastY),
+                )
+                drawCircle(
+                    color = Color.White,
+                    radius = 3.2f,
+                    center = Offset(lastX, lastY),
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun GradeBadge(grade: QualityGrade) {
-    val color = grade.color()
+    val color by animateColorAsState(grade.color(), tween(280), label = "badgeColor")
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
