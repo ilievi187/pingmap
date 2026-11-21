@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  verify:
+    name: Build & Test (Linux + Android)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+      - name: Run unit tests
+        run: gradle :composeApp:desktopTest :composeApp:testDebugUnitTest --no-daemon
+      - name: Build Linux distributable & Android debug APK
+        run: |
+          gradle :composeApp:createDistributable :composeApp:assembleDebug --no-daemon
+          ./composeApp/build/compose/binaries/main/app/PingMap/bin/PingMap --smoke-test

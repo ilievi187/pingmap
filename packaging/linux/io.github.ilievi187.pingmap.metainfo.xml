@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.ilievi187.pingmap</id>
+  <name>PingMap</name>
+  <summary>Cross-platform live gaming server ping, jitter, and packet loss monitor</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>PingMap measures real-time latency (RTT), jitter, and packet loss across CS2/FACEIT, Valorant, League of Legends, Fortnite/Apex, DNS backbones, and custom IP targets on Linux, Windows, and Android.</p>
+  </description>
+  <launchable type="desktop-id">pingmap.desktop</launchable>
+  <url type="homepage">https://github.com/ilievi187/pingmap</url>
+</component>

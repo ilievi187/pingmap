@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PingMap
+GenericName=Gaming & Network Latency Monitor
+Comment=Live ping, jitter, and packet loss monitor for CS2/FACEIT, Valorant, LoL, Fortnite, Apex, DNS, and custom IPs
+Exec=PingMap
+Icon=pingmap
+Terminal=false
+Categories=Network;Utility;
+Keywords=ping;latency;jitter;packet loss;cs2;faceit;valorant;gaming;network;
+StartupWMClass=io-github-ilievi187-pingmap-MainKt
