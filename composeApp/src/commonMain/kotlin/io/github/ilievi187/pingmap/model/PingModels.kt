@@ -66,6 +66,34 @@ data class ServerStats(
             return dropped * 100.0 / samples.size
         }
 
+    fun percentileMs(p: Double): Double? {
+        val sorted = validRtts.sorted()
+        if (sorted.isEmpty()) return null
+        val idx = ((p / 100.0) * (sorted.size - 1)).toInt().coerceIn(0, sorted.lastIndex)
+        return sorted[idx]
+    }
+
+    val p50Ms: Double? get() = percentileMs(50.0)
+    val p95Ms: Double? get() = percentileMs(95.0)
+    val p99Ms: Double? get() = percentileMs(99.0)
+
+    fun spikeCount(thresholdMs: Double? = null): Int {
+        val avg = avgMs ?: return 0
+        val dynamicLimit = (avg * 1.55).coerceAtLeast(avg + 15.0)
+        val limit = thresholdMs?.let { minOf(it, dynamicLimit) } ?: dynamicLimit
+        return validRtts.count { it > limit }
+    }
+
+    val stabilityScore: Int
+        get() {
+            val avg = avgMs ?: return 0
+            val jitter = jitterMs ?: 0.0
+            val lossPenalty = lossPercent * 4.5
+            val jitterPenalty = jitter * 1.6
+            val latencyPenalty = ((avg - 25.0).coerceAtLeast(0.0)) * 0.45
+            return (100.0 - lossPenalty - jitterPenalty - latencyPenalty).toInt().coerceIn(0, 100)
+        }
+
     val grade: QualityGrade
         get() {
             val avg = avgMs ?: return if (samples.isEmpty()) QualityGrade.WAITING else QualityGrade.POOR

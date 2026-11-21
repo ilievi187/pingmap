@@ -9,6 +9,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 
@@ -37,6 +38,35 @@ actual suspend fun probeTcpLatency(host: String, port: Int, timeoutMs: Int): Dou
             null
         }
     }
+
+actual suspend fun resolveDnsHost(hostname: String): DnsLookupResult =
+    withContext(Dispatchers.IO) {
+        val clean = hostname.trim()
+        if (clean.isEmpty()) {
+            return@withContext DnsLookupResult(clean, emptyList(), null, "Enter a hostname")
+        }
+        try {
+            val startNs = System.nanoTime()
+            val addrs = InetAddress.getAllByName(clean).mapNotNull { it.hostAddress }.distinct()
+            val elapsedMs = (System.nanoTime() - startNs) / 1_000_000.0
+            DnsLookupResult(clean, addrs, elapsedMs, null)
+        } catch (e: Exception) {
+            DnsLookupResult(clean, emptyList(), null, e.message ?: "Resolution failed")
+        }
+    }
+
+actual fun exportTextReport(fileName: String, content: String): String? {
+    val ctx = AndroidAppContext.appContext ?: return null
+    return try {
+        val dir = File(ctx.filesDir, "reports")
+        if (!dir.exists()) dir.mkdirs()
+        val file = File(dir, fileName)
+        file.writeText(content, Charsets.UTF_8)
+        file.absolutePath
+    } catch (_: Exception) {
+        null
+    }
+}
 
 actual fun loadCustomServers(): List<ServerTarget> {
     val file = customServersFile() ?: return emptyList()
