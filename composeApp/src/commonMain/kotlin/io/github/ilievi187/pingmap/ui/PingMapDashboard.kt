@@ -54,6 +54,7 @@ fun PingMapDashboardApp() {
     var intervalSec by remember { mutableStateOf(2) }
     var search by remember { mutableStateOf("") }
     var showAddDialog by remember { mutableStateOf(false) }
+    var maintenanceFeature by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(allTargets) {
         statsMap = allTargets.associate { target ->
@@ -123,14 +124,15 @@ fun PingMapDashboardApp() {
                 DashboardRail(
                     isRunning = isRunning,
                     pulse = pulseValue,
-                    onAdd = { showAddDialog = true }
+                    onAdd = { showAddDialog = true },
+                    onMaintenance = { maintenanceFeature = it }
                 )
 
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     DashboardHeader(
                         isRunning = isRunning,
@@ -156,10 +158,10 @@ fun PingMapDashboardApp() {
 
                     Row(
                         modifier = Modifier.fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         ServerListPanel(
-                            modifier = Modifier.width(286.dp).fillMaxHeight(),
+                            modifier = Modifier.width(258.dp).fillMaxHeight(),
                             stats = visibleStats,
                             selectedId = selectedStats?.target?.id,
                             search = search,
@@ -179,7 +181,7 @@ fun PingMapDashboardApp() {
                         )
 
                         SideInsightsPanel(
-                            modifier = Modifier.width(304.dp).fillMaxHeight(),
+                            modifier = Modifier.width(276.dp).fillMaxHeight(),
                             stats = visibleStats,
                             selected = selectedStats,
                             onSelect = { selectedServerId = it.target.id }
@@ -188,6 +190,13 @@ fun PingMapDashboardApp() {
                 }
             }
         }
+    }
+
+    maintenanceFeature?.let { feature ->
+        MaintenanceDialog(
+            feature = feature,
+            onDismiss = { maintenanceFeature = null }
+        )
     }
 
     if (showAddDialog) {
@@ -218,7 +227,8 @@ fun PingMapDashboardApp() {
 private fun DashboardRail(
     isRunning: Boolean,
     pulse: Float,
-    onAdd: () -> Unit
+    onAdd: () -> Unit,
+    onMaintenance: (String) -> Unit
 ) {
     Surface(
         modifier = Modifier.width(58.dp).fillMaxHeight(),
@@ -249,13 +259,13 @@ private fun DashboardRail(
             }
 
             Spacer(Modifier.height(4.dp))
-            RailIcon(Icons.Default.Home, false) {}
+            RailIcon(Icons.Default.Home, false, maintenance = true) { onMaintenance("Overview") }
             RailIcon(Icons.Default.Speed, true) {}
-            RailIcon(Icons.Default.Dns, false) {}
-            RailIcon(Icons.Default.Insights, false) {}
-            RailIcon(Icons.Default.Hub, false) {}
+            RailIcon(Icons.Default.Dns, false, maintenance = true) { onMaintenance("DNS tools") }
+            RailIcon(Icons.Default.Insights, false, maintenance = true) { onMaintenance("Analytics") }
+            RailIcon(Icons.Default.Hub, false, maintenance = true) { onMaintenance("Network topology") }
             Spacer(Modifier.weight(1f))
-            RailIcon(Icons.Default.Add, false, onAdd)
+            RailIcon(Icons.Default.Add, false, onClick = onAdd)
             RailIcon(Icons.Default.LocalCafe, false) {
                 openExternalUrl("https://buymeacoffee.com/aurorauap")
             }
@@ -264,7 +274,12 @@ private fun DashboardRail(
 }
 
 @Composable
-private fun RailIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, active: Boolean, onClick: () -> Unit) {
+private fun RailIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    active: Boolean,
+    maintenance: Boolean = false,
+    onClick: () -> Unit
+) {
     Box(
         modifier = Modifier
             .size(36.dp)
@@ -275,10 +290,27 @@ private fun RailIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, acti
     ) {
         Icon(
             icon,
-            contentDescription = null,
+            contentDescription = if (maintenance) "Under maintenance" else null,
             tint = if (active) PingPalette.Accent else Color(0xFF668097),
             modifier = Modifier.size(19.dp)
         )
+        if (maintenance) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(13.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFFFB84D)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Build,
+                    contentDescription = "Updates coming",
+                    tint = Color(0xFF241604),
+                    modifier = Modifier.size(8.dp)
+                )
+            }
+        }
     }
 }
 
@@ -555,9 +587,9 @@ private fun ServerListRow(
 private fun MainTelemetryPanel(modifier: Modifier, stats: ServerStats?, pulse: Float) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(10.dp),
-        color = Color(0xFF0A131E),
-        border = BorderStroke(1.dp, Color(0xFF172538))
+        shape = RoundedCornerShape(9.dp),
+        color = Color(0xFF08121C),
+        border = BorderStroke(1.dp, Color(0xFF14283A))
     ) {
         if (stats == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -568,12 +600,20 @@ private fun MainTelemetryPanel(modifier: Modifier, stats: ServerStats?, pulse: F
 
         val color by animateColorAsState(stats.grade.dashboardColor(), tween(260), label = "gradeColor")
         Column(
-            modifier = Modifier.fillMaxSize().padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.fillMaxSize().padding(11.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.LocationOn, null, tint = PingPalette.Accent, modifier = Modifier.size(15.dp))
-                Spacer(Modifier.width(5.dp))
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(PingPalette.Accent.copy(alpha = 0.10f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.LocationOn, null, tint = PingPalette.Accent, modifier = Modifier.size(15.dp))
+                }
+                Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         "PingMap · ${stats.target.category.label}",
@@ -592,53 +632,185 @@ private fun MainTelemetryPanel(modifier: Modifier, stats: ServerStats?, pulse: F
 
             TargetPathStrip(stats, color)
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(Color(0xFF08141F), Color(0xFF09111A))
-                        )
-                    )
+            LatencyHero(
+                stats = stats,
+                color = color,
+                pulse = pulse,
+                modifier = Modifier.fillMaxWidth().height(238.dp)
+            )
+
+            Surface(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                shape = RoundedCornerShape(9.dp),
+                color = Color(0xFF07111A),
+                border = BorderStroke(1.dp, Color(0xFF14263A))
             ) {
-                Canvas(Modifier.fillMaxSize()) {
-                    val center = Offset(size.width * 0.5f, size.height * 0.33f)
-                    drawCircle(
-                        color = color.copy(alpha = (1f - pulse) * 0.05f),
-                        radius = 72f + pulse * 42f,
-                        center = center
-                    )
-                }
-
                 Column(
-                    modifier = Modifier.fillMaxSize().padding(14.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    modifier = Modifier.fillMaxSize().padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
-                    Text("LATENCY", color = Color(0xFF5C7185), fontSize = 9.sp)
-                    Spacer(Modifier.height(6.dp))
-                    Row(verticalAlignment = Alignment.Bottom) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            stats.currentMs?.let { ((it * 10).roundToInt() / 10.0).toString() } ?: "—",
-                            color = color,
-                            fontSize = 54.sp,
-                            fontWeight = FontWeight.ExtraBold
+                            "LATENCY TIMELINE",
+                            color = Color(0xFF71869B),
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold
                         )
-                        Spacer(Modifier.width(5.dp))
-                        Text("ms", color = color, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
+                        Spacer(Modifier.weight(1f))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(PingPalette.Excellent.copy(alpha = 0.10f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text("LIVE", color = PingPalette.Excellent, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
-
-                    Spacer(Modifier.height(10.dp))
-                    MetricsRow(stats)
-                    Spacer(Modifier.height(14.dp))
-
                     DashboardLatencyGraph(
                         samples = stats.samples,
                         lineColor = color,
                         pulse = pulse,
                         modifier = Modifier.fillMaxWidth().weight(1f)
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LatencyHero(
+    stats: ServerStats,
+    color: Color,
+    pulse: Float,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF07141F), Color(0xFF071019))
+                )
+            )
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val cx = size.width * 0.5f
+            val cy = size.height * 0.46f
+
+            for (i in 1..5) {
+                val y = size.height * i / 6f
+                drawLine(
+                    Color(0xFF183248).copy(alpha = 0.20f),
+                    Offset(0f, y),
+                    Offset(size.width, y),
+                    strokeWidth = 1f
+                )
+            }
+
+            for (i in 1..8) {
+                val x = size.width * i / 9f
+                drawLine(
+                    Color(0xFF183248).copy(alpha = 0.11f),
+                    Offset(x, 0f),
+                    Offset(x, size.height),
+                    strokeWidth = 1f
+                )
+            }
+
+            drawCircle(
+                color = color.copy(alpha = 0.025f + (1f - pulse) * 0.025f),
+                radius = 102f + pulse * 26f,
+                center = Offset(cx, cy)
+            )
+            drawCircle(
+                color = color.copy(alpha = 0.05f),
+                radius = 72f,
+                center = Offset(cx, cy),
+                style = Stroke(width = 1.2f)
+            )
+
+            val phases = listOf(-54f, -28f, 2f, 30f, 58f)
+            phases.forEachIndexed { index, offset ->
+                val wave = (pulse - 0.5f) * (10f + index * 2f)
+                val path = Path().apply {
+                    moveTo(-30f, cy + offset + wave)
+                    cubicTo(
+                        size.width * 0.22f, cy + offset * 0.15f - 34f,
+                        size.width * 0.38f, cy - offset * 0.18f + 28f,
+                        cx, cy + offset * 0.05f
+                    )
+                    cubicTo(
+                        size.width * 0.64f, cy + offset * 0.10f - 24f,
+                        size.width * 0.80f, cy - offset * 0.16f + 36f,
+                        size.width + 30f, cy + offset - wave
+                    )
+                }
+                drawPath(
+                    path,
+                    color.copy(alpha = 0.035f),
+                    style = Stroke(width = 12f - index.toFloat(), cap = StrokeCap.Round)
+                )
+                drawPath(
+                    path,
+                    color.copy(alpha = 0.16f + index * 0.018f),
+                    style = Stroke(width = 1.3f + (index % 2) * 0.5f, cap = StrokeCap.Round)
+                )
+            }
+
+            drawCircle(color.copy(alpha = 0.40f), radius = 2.5f + pulse * 2.5f, center = Offset(size.width * 0.23f, cy - 28f))
+            drawCircle(color.copy(alpha = 0.55f), radius = 2.2f + (1f - pulse) * 2f, center = Offset(size.width * 0.76f, cy + 22f))
+            drawCircle(Color.White.copy(alpha = 0.82f), radius = 2.2f, center = Offset(cx, cy))
+        }
+
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("LIVE LATENCY", color = Color(0xFF5F768B), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.weight(1f))
+                Text(stats.target.host, color = Color(0xFF52687C), fontSize = 7.sp, maxLines = 1)
+            }
+
+            Spacer(Modifier.weight(1f))
+
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    stats.currentMs?.let { ((it * 10).roundToInt() / 10.0).toString() } ?: "—",
+                    color = color,
+                    fontSize = 58.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    "ms",
+                    color = color,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 9.dp)
+                )
+            }
+
+            Text(
+                stats.grade.label,
+                color = color.copy(alpha = 0.86f),
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(Modifier.weight(1f))
+
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = Color(0xFF091722).copy(alpha = 0.92f),
+                border = BorderStroke(1.dp, Color(0xFF183046))
+            ) {
+                Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    MetricsRow(stats)
                 }
             }
         }
@@ -884,6 +1056,60 @@ private fun DashboardLatencyGraph(
         drawCircle(lineColor.copy(alpha = (1f - pulse) * 0.45f), radius = 5f + pulse * 7f, center = last)
         drawCircle(Color.White, radius = 2.8f, center = last)
     }
+}
+
+@Composable
+private fun MaintenanceDialog(
+    feature: String,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF0E1824),
+        icon = {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFFFFB84D).copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Build,
+                    contentDescription = null,
+                    tint = Color(0xFFFFB84D),
+                    modifier = Modifier.size(23.dp)
+                )
+            }
+        },
+        title = {
+            Text(
+                "Under maintenance",
+                color = PingPalette.Text,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "$feature is still being polished.",
+                    color = PingPalette.Text,
+                    fontSize = 13.sp
+                )
+                Text(
+                    "Updates coming soon.",
+                    color = Color(0xFFFFB84D),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Got it", color = PingPalette.Accent)
+            }
+        }
+    )
 }
 
 @Composable
