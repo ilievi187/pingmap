@@ -6,7 +6,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import io.github.ilievi187.pingmap.model.DefaultServers
-import io.github.ilievi187.pingmap.ui.PingMapApp
+import io.github.ilievi187.pingmap.ui.PingMapDashboardApp
 
 fun main(args: Array<String>) {
     if ("--smoke-test" in args) {
@@ -17,9 +17,9 @@ fun main(args: Array<String>) {
         Window(
             onCloseRequest = ::exitApplication,
             title = "PingMap — Live Gaming & Network Latency Monitor",
-            state = rememberWindowState(size = DpSize(1040.dp, 760.dp)),
+            state = rememberWindowState(size = DpSize(1360.dp, 860.dp)),
         ) {
-            PingMapApp()
+            PingMapDashboardApp()
         }
     }
 }
