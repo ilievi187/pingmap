@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: pingmap-ci-${{ github.ref }}
@@ -41,9 +41,13 @@ jobs:
           find composeApp/build/outputs/apk/debug -type f -name '*.apk' -print -quit | xargs -r -I '{}' cp '{}' ci-artifacts/PingMap-android-debug.apk
           test -s ci-artifacts/PingMap-android-debug.apk
           (cd ci-artifacts && sha256sum PingMap-linux-x86_64.tar.gz PingMap-android-debug.apk > SHA256SUMS.txt)
-      - uses: actions/upload-artifact@v4
+      - name: Publish verified binaries as GitHub prerelease
+        uses: softprops/action-gh-release@v2
         with:
-          name: PingMap-Ubuntu-server-build
-          path: ci-artifacts/*
-          if-no-files-found: error
-          retention-days: 30
+          tag_name: server-${{ github.sha }}
+          name: PingMap Linux and Android — Ubuntu server build
+          prerelease: true
+          generate_release_notes: false
+          body: Built on the personal Ubuntu runner from this exact source commit.
+          files: ci-artifacts/*
+          fail_on_unmatched_files: true
