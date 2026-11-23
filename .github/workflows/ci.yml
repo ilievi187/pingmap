@@ -3,8 +3,6 @@ name: CI — Ubuntu server
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -21,11 +19,6 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - name: Identify physical build runner
-        run: |
-          echo "Runner: $RUNNER_NAME"
-          echo "Machine: $(hostname)"
-          uname -a
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
