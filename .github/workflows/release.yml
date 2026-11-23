@@ -41,7 +41,8 @@ jobs:
 
       - name: Package Linux AppImage and portable tarball
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${VERSION#v}"
           if [ -z "$VERSION" ] || [ "$VERSION" = "main" ]; then VERSION="1.0.0"; fi
           chmod +x packaging/linux/build-appimage.sh
           ./packaging/linux/build-appimage.sh "$VERSION"
@@ -51,7 +52,8 @@ jobs:
 
       - name: Stage Linux & Android release artifacts
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${VERSION#v}"
           if [ -z "$VERSION" ] || [ "$VERSION" = "main" ]; then VERSION="1.0.0"; fi
           mkdir -p release-artifacts
           cp composeApp/build/compose/binaries/main/deb/*.deb "release-artifacts/pingmap-${VERSION}-amd64.deb"
@@ -62,10 +64,14 @@ jobs:
           cp "$APK" "release-artifacts/pingmap-${VERSION}-android.apk"
           ls -lh release-artifacts/
 
-      - uses: actions/upload-artifact@v4
+      - name: Publish Linux and Android packages to Releases
+        uses: softprops/action-gh-release@v2
         with:
-          name: linux-android-artifacts
-          path: release-artifacts/*
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: PingMap ${{ github.event.inputs.tag || github.ref_name }}
+          prerelease: false
+          files: release-artifacts/*
+          fail_on_unmatched_files: true
 
   build-windows:
     name: Build Windows (Portable ZIP + MSI)
@@ -100,33 +106,12 @@ jobs:
           Copy-Item $msi.FullName "release-artifacts/PingMap-$ver-windows-x64.msi"
           Get-ChildItem release-artifacts
 
-      - uses: actions/upload-artifact@v4
+      - name: Attach Windows packages to the same Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: windows-artifacts
-          path: release-artifacts/*
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: PingMap ${{ github.event.inputs.tag || github.ref_name }}
+          prerelease: false
+          files: release-artifacts/*
+          fail_on_unmatched_files: true
 
-  publish-release:
-    name: Publish GitHub Release
-    needs: [ build-linux-and-android, build-windows ]
-    if: ${{ always() && needs.build-linux-and-android.result == 'success' && (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped') }}
-    runs-on: [self-hosted, Linux, X64, nn-ubuntu-ci]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          path: all-artifacts
-          merge-multiple: true
-      - name: Generate SHA-256 checksums
-        run: |
-          cd all-artifacts
-          sha256sum * > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          gh release create "$TAG" all-artifacts/* \
-            --title "PingMap $TAG" \
-            --notes-file CHANGELOG.md \
-            --latest
