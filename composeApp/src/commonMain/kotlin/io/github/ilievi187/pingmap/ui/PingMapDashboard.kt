@@ -72,13 +72,35 @@ fun PingMapDashboardApp() {
     var customServers by remember { mutableStateOf(loadCustomServers()) }
     val allTargets = remember(customServers) { DefaultServers.preset + customServers }
     var statsMap by remember { mutableStateOf(allTargets.associate { it.id to ServerStats(it) }) }
+    var selectedSection by remember { mutableStateOf(DashboardSection.LIVE_LATENCY) }
     var selectedCategory by remember { mutableStateOf(GameCategory.CS2_FACEIT) }
     var selectedServerId by remember { mutableStateOf(DefaultServers.preset.first().id) }
     var isRunning by remember { mutableStateOf(true) }
+    var isBursting by remember { mutableStateOf(false) }
+    var isProbingAll by remember { mutableStateOf(false) }
     var intervalSec by remember { mutableStateOf(2) }
+    var alertThresholdMs by remember { mutableStateOf<Int?>(80) }
     var search by remember { mutableStateOf("") }
     var showAddDialog by remember { mutableStateOf(false) }
-    var maintenanceFeature by remember { mutableStateOf<String?>(null) }
+    var statusToast by remember { mutableStateOf<String?>(null) }
+
+    var eventCounter by remember { mutableStateOf(1) }
+    var telemetryEvents by remember { mutableStateOf<List<TelemetryEvent>>(emptyList()) }
+
+    var dnsRows by remember { mutableStateOf(DefaultDnsResolvers.map { DnsBenchmarkRow(it) }) }
+    var isDnsBenchmarking by remember { mutableStateOf(false) }
+
+    fun logEvent(tag: String, message: String, severity: EventSeverity = EventSeverity.INFO) {
+        val nextId = eventCounter++
+        telemetryEvents = (listOf(TelemetryEvent(nextId, tag, message, severity)) + telemetryEvents).take(40)
+    }
+
+    LaunchedEffect(statusToast) {
+        if (statusToast != null) {
+            delay(4200L)
+            statusToast = null
+        }
+    }
 
     LaunchedEffect(allTargets) {
         statsMap = allTargets.associate { target ->
@@ -124,10 +146,7 @@ fun PingMapDashboardApp() {
         .filter { it.avgMs != null }
         .minWithOrNull(compareBy<ServerStats> { it.lossPercent > 1.0 }.thenBy { it.avgMs ?: Double.MAX_VALUE })
 
-    suspend fun probeVisibleOnce() {
-        val targets = allTargets.filter {
-            selectedCategory == GameCategory.ALL || it.category == selectedCategory
-        }
+    suspend fun probeTargets(targets: List<ServerTarget>) {
         if (targets.isEmpty()) return
         val results = coroutineScope {
             targets.map { t ->
@@ -135,12 +154,104 @@ fun PingMapDashboardApp() {
             }.awaitAll()
         }
         val next = statsMap.toMutableMap()
+        val threshold = alertThresholdMs?.toDouble()
         for ((id, rtt) in results) {
             val current = next[id] ?: continue
-            next[id] = current.appendSample(rtt, maxHistory = 48)
+            val updated = current.appendSample(rtt, maxHistory = 48)
+            next[id] = updated
+            if (id == selectedServerId) {
+                if (rtt == null) {
+                    logEvent("LOSS", "${current.target.name} packet dropped (timeout)", EventSeverity.ALERT)
+                } else if (threshold != null && rtt > threshold) {
+                    logEvent("SPIKE", "${current.target.name} hit ${fmtDashboardMs(rtt)} (> ${alertThresholdMs}ms)", EventSeverity.WARN)
+                }
+            }
         }
         statsMap = next
     }
+
+    suspend fun probeVisibleOnce() {
+        val targets = allTargets.filter {
+            selectedCategory == GameCategory.ALL || it.category == selectedCategory
+        }
+        probeTargets(targets)
+    }
+
+    fun triggerBurst() {
+        if (isBursting) return
+        scope.launch {
+            isBursting = true
+            logEvent("BURST", "Started 5× rapid probe burst on ${selectedCategory.label}", EventSeverity.INFO)
+            repeat(5) {
+                probeVisibleOnce()
+                delay(250L)
+            }
+            isBursting = false
+            logEvent("BURST", "Completed 5× rapid probe burst", EventSeverity.SUCCESS)
+        }
+    }
+
+    fun triggerProbeAll() {
+        if (isProbingAll) return
+        scope.launch {
+            isProbingAll = true
+            logEvent("SCAN", "Scanning all ${allTargets.size} servers across every game category", EventSeverity.INFO)
+            probeTargets(allTargets)
+            isProbingAll = false
+            logEvent("SCAN", "Full multi-game scan finished", EventSeverity.SUCCESS)
+        }
+    }
+
+    fun triggerDnsBenchmark() {
+        if (isDnsBenchmarking) return
+        scope.launch {
+            isDnsBenchmarking = true
+            var working = DefaultDnsResolvers.map { DnsBenchmarkRow(it) }
+            dnsRows = working
+            repeat(3) {
+                val results = coroutineScope {
+                    working.map { row ->
+                        async { row.target.id to probeTcpLatency(row.target.ip, row.target.port, timeoutMs = 1500) }
+                    }.awaitAll()
+                }.toMap()
+                working = working.map { row ->
+                    row.copy(samples = row.samples + results[row.target.id])
+                }
+                dnsRows = working
+                delay(180L)
+            }
+            isDnsBenchmarking = false
+            val winner = working.filter { it.avgMs != null }.minByOrNull { it.avgMs ?: Double.MAX_VALUE }
+            if (winner != null) {
+                logEvent("DNS", "Fastest resolver: ${winner.target.name} (${winner.target.ip}) · ${fmtDashboardMs(winner.avgMs)}", EventSeverity.SUCCESS)
+            }
+        }
+    }
+
+    fun triggerExportCsv() {
+        val csv = buildCsvReport(statsMap.values)
+        val fileName = "pingmap-telemetry-${selectedCategory.name.lowercase()}-${eventCounter}.csv"
+        val savedPath = exportTextReport(fileName, csv)
+        if (savedPath != null) {
+            statusToast = "Exported CSV → $savedPath"
+            logEvent("EXPORT", "Saved CSV report to $savedPath", EventSeverity.SUCCESS)
+        } else {
+            statusToast = "Could not export CSV report"
+            logEvent("EXPORT", "CSV export failed", EventSeverity.WARN)
+        }
+    }
+
+    fun triggerReset() {
+        statsMap = allTargets.associate { it.id to ServerStats(it) }
+        telemetryEvents = emptyList()
+        statusToast = "Session telemetry reset"
+        logEvent("SYSTEM", "Session telemetry cleared", EventSeverity.INFO)
+    }
+
+    val isAlertActive = selectedStats != null && (
+        selectedStats.lossPercent > 0.0 ||
+            (alertThresholdMs != null && (selectedStats.currentMs ?: 0.0) > alertThresholdMs!!)
+        )
 
     LaunchedEffect(isRunning, selectedCategory, intervalSec, allTargets) {
         if (!isRunning) return@LaunchedEffect
@@ -196,10 +307,16 @@ fun PingMapDashboardApp() {
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 DashboardRail(
+                    selectedSection = selectedSection,
                     isRunning = isRunning,
                     pulse = pulseValue,
+                    onSelectSection = { section ->
+                        selectedSection = section
+                        if (section == DashboardSection.DNS_TOOLS && dnsRows.all { it.samples.isEmpty() } && !isDnsBenchmarking) {
+                            triggerDnsBenchmark()
+                        }
+                    },
                     onAdd = { showAddDialog = true },
-                    onMaintenance = { maintenanceFeature = it },
                 )
 
                 Column(
@@ -207,76 +324,169 @@ fun PingMapDashboardApp() {
                     verticalArrangement = Arrangement.spacedBy(9.dp),
                 ) {
                     DashboardHeader(
+                        activeSection = selectedSection,
                         isRunning = isRunning,
+                        isBursting = isBursting,
                         intervalSec = intervalSec,
+                        alertThresholdMs = alertThresholdMs,
+                        isAlertActive = isAlertActive,
                         pulse = pulseValue,
                         onToggleRun = { isRunning = !isRunning },
+                        onBurst = { triggerBurst() },
+                        onCycleAlert = {
+                            alertThresholdMs = when (alertThresholdMs) {
+                                null -> 50
+                                50 -> 80
+                                80 -> 120
+                                else -> null
+                            }
+                        },
+                        onExportCsv = { triggerExportCsv() },
+                        onReset = { triggerReset() },
                         onRefresh = { scope.launch { probeVisibleOnce() } },
                         onInterval = { intervalSec = it },
                     )
 
-                    BestSignalBanner(
-                        best = bestServer,
-                        pulse = pulseValue,
-                        onClick = { selectedServerId = it.target.id },
-                    )
+                    statusToast?.let { toast ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(DashboardPalette.MatrixGreen.copy(alpha = 0.14f))
+                                .border(1.dp, DashboardPalette.MatrixGreen.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                                .padding(horizontal = 12.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Default.CheckCircle, null, tint = DashboardPalette.MatrixGreen, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = toast,
+                                color = DashboardPalette.TextPrimary,
+                                fontSize = 10.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Dismiss",
+                                tint = DashboardPalette.TextSecondary,
+                                modifier = Modifier.size(14.dp).clickable { statusToast = null },
+                            )
+                        }
+                    }
 
-                    CategoryTabs(
-                        selected = selectedCategory,
-                        onSelect = {
-                            selectedCategory = it
-                            statsMap.values.firstOrNull { s ->
-                                it == GameCategory.ALL || s.target.category == it
-                            }?.let { s -> selectedServerId = s.target.id }
-                        },
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    if (selectedSection == DashboardSection.LIVE_LATENCY ||
+                        selectedSection == DashboardSection.ANALYTICS ||
+                        selectedSection == DashboardSection.TOPOLOGY
                     ) {
-                        ServerListPanel(
-                            modifier = Modifier.width(268.dp).fillMaxHeight(),
-                            stats = visibleStats,
-                            selectedId = selectedStats?.target?.id,
-                            search = search,
-                            onSearch = { search = it },
-                            onSelect = { selectedServerId = it.target.id },
-                            onDelete = { stats ->
-                                val next = customServers.filterNot { it.id == stats.target.id }
-                                customServers = next
-                                saveCustomServers(next)
+                        BestSignalBanner(
+                            best = bestServer,
+                            pulse = pulseValue,
+                            onClick = { selectedServerId = it.target.id },
+                        )
+
+                        CategoryTabs(
+                            selected = selectedCategory,
+                            onSelect = {
+                                selectedCategory = it
+                                statsMap.values.firstOrNull { s ->
+                                    it == GameCategory.ALL || s.target.category == it
+                                }?.let { s -> selectedServerId = s.target.id }
                             },
                         )
+                    }
 
-                        MainTelemetryPanel(
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                            stats = selectedStats,
-                            isRunning = isRunning,
-                            intervalSec = intervalSec,
-                            pulse = pulseValue,
-                            flow = flowValue,
-                        )
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        when (selectedSection) {
+                            DashboardSection.OVERVIEW -> OverviewScreen(
+                                statsMap = statsMap,
+                                events = telemetryEvents,
+                                alertThresholdMs = alertThresholdMs,
+                                isBursting = isBursting,
+                                isProbingAll = isProbingAll,
+                                pulse = pulseValue,
+                                onJumpToServer = { cat, id ->
+                                    selectedCategory = cat
+                                    selectedServerId = id
+                                    selectedSection = DashboardSection.LIVE_LATENCY
+                                },
+                                onProbeAll = { triggerProbeAll() },
+                                onBurst = { triggerBurst() },
+                                onExportCsv = { triggerExportCsv() },
+                            )
 
-                        SideInsightsPanel(
-                            modifier = Modifier.width(282.dp).fillMaxHeight(),
-                            stats = visibleStats,
-                            selected = selectedStats,
-                            isRunning = isRunning,
-                            pulse = pulseValue,
-                            onSelect = { selectedServerId = it.target.id },
-                        )
+                            DashboardSection.LIVE_LATENCY -> Row(
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                ServerListPanel(
+                                    modifier = Modifier.width(268.dp).fillMaxHeight(),
+                                    stats = visibleStats,
+                                    selectedId = selectedStats?.target?.id,
+                                    search = search,
+                                    onSearch = { search = it },
+                                    onSelect = { selectedServerId = it.target.id },
+                                    onDelete = { stats ->
+                                        val next = customServers.filterNot { it.id == stats.target.id }
+                                        customServers = next
+                                        saveCustomServers(next)
+                                    },
+                                )
+
+                                MainTelemetryPanel(
+                                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                                    stats = selectedStats,
+                                    isRunning = isRunning,
+                                    intervalSec = intervalSec,
+                                    pulse = pulseValue,
+                                    flow = flowValue,
+                                )
+
+                                SideInsightsPanel(
+                                    modifier = Modifier.width(282.dp).fillMaxHeight(),
+                                    stats = visibleStats,
+                                    selected = selectedStats,
+                                    isRunning = isRunning,
+                                    pulse = pulseValue,
+                                    onSelect = { selectedServerId = it.target.id },
+                                )
+                            }
+
+                            DashboardSection.DNS_TOOLS -> DnsToolsScreen(
+                                rows = dnsRows,
+                                isBenchmarking = isDnsBenchmarking,
+                                onRunBenchmark = { triggerDnsBenchmark() },
+                                onLogEvent = { tag, msg, sev -> logEvent(tag, msg, sev) },
+                            )
+
+                            DashboardSection.ANALYTICS -> AnalyticsScreen(
+                                stats = visibleStats,
+                                selected = selectedStats,
+                                alertThresholdMs = alertThresholdMs,
+                                onSelect = { selectedServerId = it.target.id },
+                                onExportCsv = { triggerExportCsv() },
+                            )
+
+                            DashboardSection.TOPOLOGY -> TopologyScreen(
+                                stats = visibleStats,
+                                selected = selectedStats,
+                                isRunning = isRunning,
+                                pulse = pulseValue,
+                                flow = flowValue,
+                                onSelect = { selectedServerId = it.target.id },
+                                onOpenLive = { s ->
+                                    selectedServerId = s.target.id
+                                    selectedSection = DashboardSection.LIVE_LATENCY
+                                },
+                                onLogEvent = { tag, msg, sev -> logEvent(tag, msg, sev) },
+                            )
+                        }
                     }
                 }
             }
         }
-    }
-
-    maintenanceFeature?.let { feature ->
-        MaintenanceDialog(
-            feature = feature,
-            onDismiss = { maintenanceFeature = null },
-        )
     }
 
     if (showAddDialog) {
@@ -308,7 +518,7 @@ fun PingMapDashboardApp() {
 // =============================================================================
 
 @Composable
-private fun CyberPanel(
+internal fun CyberPanel(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = DashboardDimens.PanelRadius,
     topColor: Color = DashboardPalette.PanelTop,
@@ -370,7 +580,7 @@ private fun CyberPanel(
 }
 
 @Composable
-private fun CyberSectionHeader(
+internal fun CyberSectionHeader(
     title: String,
     accent: Color = DashboardPalette.Cyan,
     trailing: (@Composable () -> Unit)? = null,
@@ -402,7 +612,7 @@ private fun CyberSectionHeader(
 }
 
 @Composable
-private fun CyberStatusPill(
+internal fun CyberStatusPill(
     live: Boolean,
     pulse: Float,
     labelLive: String = "LIVE",
@@ -445,10 +655,11 @@ private fun CyberStatusPill(
 
 @Composable
 private fun DashboardRail(
+    selectedSection: DashboardSection,
     isRunning: Boolean,
     pulse: Float,
+    onSelectSection: (DashboardSection) -> Unit,
     onAdd: () -> Unit,
-    onMaintenance: (String) -> Unit,
 ) {
     CyberPanel(
         modifier = Modifier.width(64.dp).fillMaxHeight(),
@@ -497,7 +708,8 @@ private fun DashboardRail(
                             )
                         ),
                         RoundedCornerShape(13.dp),
-                    ),
+                    )
+                    .clickable { onSelectSection(DashboardSection.OVERVIEW) },
                 contentAlignment = Alignment.Center,
             ) {
                 Canvas(Modifier.fillMaxSize()) {
@@ -532,36 +744,32 @@ private fun DashboardRail(
             RailIcon(
                 icon = Icons.Default.Home,
                 contentDescription = "Overview",
-                active = false,
-                maintenance = true,
-                onClick = { onMaintenance("Overview") },
+                active = selectedSection == DashboardSection.OVERVIEW,
+                onClick = { onSelectSection(DashboardSection.OVERVIEW) },
             )
             RailIcon(
                 icon = Icons.Default.Speed,
                 contentDescription = "Live Latency",
-                active = true,
-                onClick = {},
+                active = selectedSection == DashboardSection.LIVE_LATENCY,
+                onClick = { onSelectSection(DashboardSection.LIVE_LATENCY) },
             )
             RailIcon(
                 icon = Icons.Default.Dns,
-                contentDescription = "DNS tools",
-                active = false,
-                maintenance = true,
-                onClick = { onMaintenance("DNS tools") },
+                contentDescription = "DNS Tools",
+                active = selectedSection == DashboardSection.DNS_TOOLS,
+                onClick = { onSelectSection(DashboardSection.DNS_TOOLS) },
             )
             RailIcon(
                 icon = Icons.Default.Insights,
                 contentDescription = "Analytics",
-                active = false,
-                maintenance = true,
-                onClick = { onMaintenance("Analytics") },
+                active = selectedSection == DashboardSection.ANALYTICS,
+                onClick = { onSelectSection(DashboardSection.ANALYTICS) },
             )
             RailIcon(
                 icon = Icons.Default.Hub,
-                contentDescription = "Network topology",
-                active = false,
-                maintenance = true,
-                onClick = { onMaintenance("Network topology") },
+                contentDescription = "Network Topology",
+                active = selectedSection == DashboardSection.TOPOLOGY,
+                onClick = { onSelectSection(DashboardSection.TOPOLOGY) },
             )
 
             Spacer(Modifier.weight(1f))
@@ -746,17 +954,21 @@ private fun RailIcon(
 
 @Composable
 private fun DashboardHeader(
+    activeSection: DashboardSection,
     isRunning: Boolean,
+    isBursting: Boolean,
     intervalSec: Int,
+    alertThresholdMs: Int?,
+    isAlertActive: Boolean,
     pulse: Float,
     onToggleRun: () -> Unit,
+    onBurst: () -> Unit,
+    onCycleAlert: () -> Unit,
+    onExportCsv: () -> Unit,
+    onReset: () -> Unit,
     onRefresh: () -> Unit,
     onInterval: (Int) -> Unit,
 ) {
-    val refreshInteraction = remember { MutableInteractionSource() }
-    val refreshHovered by refreshInteraction.collectIsHoveredAsState()
-    val refreshScale by animateFloatAsState(if (refreshHovered) 1.07f else 1f, tween(140), label = "refScale")
-
     val toggleInteraction = remember { MutableInteractionSource() }
     val toggleHovered by toggleInteraction.collectIsHoveredAsState()
     val toggleScale by animateFloatAsState(if (toggleHovered) 1.03f else 1f, tween(140), label = "togScale")
@@ -764,6 +976,7 @@ private fun DashboardHeader(
     CyberPanel(
         modifier = Modifier.fillMaxWidth(),
         cornerRadius = DashboardDimens.PanelRadius,
+        accentGlow = if (isAlertActive) DashboardPalette.Coral.copy(alpha = 0.75f) else null,
         elevation = 8.dp,
     ) {
         Row(
@@ -771,6 +984,7 @@ private fun DashboardHeader(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Column(Modifier.weight(1f)) {
                 Row(
@@ -786,8 +1000,8 @@ private fun DashboardHeader(
                     )
                     CyberStatusPill(live = isRunning, pulse = pulse)
                     Text(
-                        text = "NET.HUD",
-                        color = DashboardPalette.MatrixGreen.copy(alpha = 0.65f),
+                        text = "// ${activeSection.title.uppercase()}",
+                        color = DashboardPalette.MatrixGreen.copy(alpha = 0.72f),
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
@@ -802,13 +1016,53 @@ private fun DashboardHeader(
                 )
             }
 
+            // Ping/Loss Alert Guard Pill
+            val guardColor = when {
+                isAlertActive -> DashboardPalette.Coral
+                alertThresholdMs != null -> DashboardPalette.Amber
+                else -> DashboardPalette.TextMuted
+            }
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(guardColor.copy(alpha = if (isAlertActive) 0.18f else 0.10f))
+                    .border(1.dp, guardColor.copy(alpha = if (isAlertActive) 0.75f else 0.34f), RoundedCornerShape(10.dp))
+                    .clickable(onClick = onCycleAlert)
+                    .padding(horizontal = 9.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Icon(
+                    imageVector = if (isAlertActive) Icons.Default.Warning else Icons.Default.NotificationsActive,
+                    contentDescription = "Alert threshold",
+                    tint = guardColor,
+                    modifier = Modifier.size(13.dp),
+                )
+                Text(
+                    text = if (alertThresholdMs != null) "GUARD ${alertThresholdMs}ms" else "GUARD OFF",
+                    color = guardColor,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+
+            // 5x Burst Stress Probe
+            CyberActionChip(
+                label = if (isBursting) "5×…" else "5× Burst",
+                icon = Icons.Default.FlashOn,
+                accent = DashboardPalette.Cyan,
+                enabled = !isBursting,
+                onClick = onBurst,
+            )
+
             // Segmented probe rate control
             Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(11.dp))
                     .background(DashboardPalette.PanelRecessed)
                     .border(1.dp, DashboardPalette.BorderSubtle, RoundedCornerShape(11.dp))
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                    .padding(horizontal = 5.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
@@ -818,7 +1072,7 @@ private fun DashboardHeader(
                     fontSize = 8.5.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 0.9.sp,
-                    modifier = Modifier.padding(horizontal = 5.dp),
+                    modifier = Modifier.padding(horizontal = 4.dp),
                 )
                 listOf(1, 2, 5).forEach { sec ->
                     SmallControl(
@@ -829,37 +1083,9 @@ private fun DashboardHeader(
                 }
             }
 
-            Spacer(Modifier.width(10.dp))
-
-            // Refresh icon button
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .scale(refreshScale)
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(
-                        if (refreshHovered) DashboardPalette.Cyan.copy(alpha = 0.16f)
-                        else DashboardPalette.PanelRecessed
-                    )
-                    .border(
-                        1.dp,
-                        if (refreshHovered) DashboardPalette.Cyan.copy(alpha = 0.55f)
-                        else DashboardPalette.BorderSubtle,
-                        RoundedCornerShape(11.dp),
-                    )
-                    .hoverable(refreshInteraction)
-                    .clickable(interactionSource = refreshInteraction, indication = null, onClick = onRefresh),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = "Refresh",
-                    tint = if (refreshHovered) DashboardPalette.CyanBright else DashboardPalette.Cyan,
-                    modifier = Modifier.size(17.dp),
-                )
-            }
-
-            Spacer(Modifier.width(8.dp))
+            HeaderIconAction(Icons.Default.Download, "Export CSV", DashboardPalette.MatrixGreen, onExportCsv)
+            HeaderIconAction(Icons.Default.RestartAlt, "Reset Session", DashboardPalette.TextSecondary, onReset)
+            HeaderIconAction(Icons.Default.Refresh, "Refresh Now", DashboardPalette.Cyan, onRefresh)
 
             // Pause / Start pill button
             val btnAccent = if (isRunning) DashboardPalette.Cyan else DashboardPalette.MatrixGreen
@@ -908,6 +1134,35 @@ private fun DashboardHeader(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun HeaderIconAction(
+    icon: ImageVector,
+    contentDescription: String,
+    tint: Color,
+    onClick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val scale by animateFloatAsState(if (hovered) 1.07f else 1f, tween(140), label = "hdrIconScale")
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .scale(scale)
+            .clip(RoundedCornerShape(11.dp))
+            .background(if (hovered) tint.copy(alpha = 0.16f) else DashboardPalette.PanelRecessed)
+            .border(
+                1.dp,
+                if (hovered) tint.copy(alpha = 0.55f) else DashboardPalette.BorderSubtle,
+                RoundedCornerShape(11.dp),
+            )
+            .hoverable(interaction)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(16.dp))
     }
 }
 
@@ -2179,7 +2434,7 @@ private fun InfoDivider() {
 }
 
 @Composable
-private fun GradeChip(grade: QualityGrade, color: Color) {
+internal fun GradeChip(grade: QualityGrade, color: Color) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
@@ -2202,7 +2457,7 @@ private fun GradeChip(grade: QualityGrade, color: Color) {
 // =============================================================================
 
 @Composable
-private fun MiniSparkline(
+internal fun MiniSparkline(
     samples: List<PingSample>,
     color: Color,
     modifier: Modifier = Modifier,
@@ -2515,7 +2770,7 @@ private fun DashboardAddServerDialog(
     )
 }
 
-private fun QualityGrade.dashboardColor(): Color = when (this) {
+internal fun QualityGrade.dashboardColor(): Color = when (this) {
     QualityGrade.EXCELLENT -> DashboardPalette.MatrixGreen
     QualityGrade.GOOD -> DashboardPalette.Cyan
     QualityGrade.FAIR -> DashboardPalette.Amber
@@ -2523,5 +2778,5 @@ private fun QualityGrade.dashboardColor(): Color = when (this) {
     QualityGrade.WAITING -> Color(0xFF6D8399)
 }
 
-private fun fmtDashboardMs(value: Double?): String =
+internal fun fmtDashboardMs(value: Double?): String =
     if (value == null) "—" else "${(value * 10.0).roundToInt() / 10.0} ms"

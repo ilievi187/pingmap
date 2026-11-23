@@ -46,4 +46,21 @@ class PingModelsTest {
         assertTrue(GameCategory.FORTNITE_APEX in categories)
         assertTrue(GameCategory.DNS_CORE in categories)
     }
+
+    @Test
+    fun calculatesPercentilesSpikesAndStabilityScore() {
+        val target = ServerTarget("t3", "Vienna", "EU", "1.1.1.1", 443, GameCategory.CS2_FACEIT)
+        val samples = listOf(18.0, 20.0, 19.0, 21.0, 20.0, 19.0, 22.0, 20.0, 19.0, 95.0)
+        var stats = ServerStats(target)
+        for (v in samples) {
+            stats = stats.appendSample(v)
+        }
+        assertNotNull(stats.p50Ms)
+        assertNotNull(stats.p95Ms)
+        assertNotNull(stats.p99Ms)
+        assertTrue(stats.p50Ms!! <= stats.p95Ms!!)
+        assertTrue(stats.p95Ms!! <= stats.p99Ms!!)
+        assertEquals(1, stats.spikeCount(thresholdMs = 60.0))
+        assertTrue(stats.stabilityScore in 1..100)
+    }
 }
